@@ -112,7 +112,7 @@ export function AuthScreen() {
   return (
     <div className="auth-shell">
       <a className="brand auth-brand" href={window.location.pathname}>
-        <img src="/assets/cadence-orb.png" alt="" />
+        <img src="/assets/ashvi.png" alt="" />
         <div>
           <strong>Ashvi</strong>
           <span>Your learning universe.</span>

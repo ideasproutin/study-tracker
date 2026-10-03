@@ -10,7 +10,7 @@ export function AccountLoading({
   return (
     <div className="auth-shell">
       <Card className="auth-card account-loading">
-        <img src="/assets/cadence-orb.png" alt="" />
+        <img src="/assets/ashvi.png" alt="" />
         <h2>Ashvi</h2>
         <p role="status">{text}</p>
         <span className="loading-line" />

@@ -4,6 +4,7 @@ import {
   Stack,
   PlusSquare,
   Flame,
+  UsersThree,
   ChartBar,
   GearSix,
   Plus,
@@ -62,7 +63,15 @@ import {
   formatSeconds,
 } from "./forms";
 import { SessionRow, History, Heatmap } from "./history";
-type Page = "Today" | "Skills" | "Log" | "Streak" | "Analytics" | "Settings";
+import { FriendsPage } from "./friends";
+type Page =
+  | "Today"
+  | "Skills"
+  | "Log"
+  | "Streak"
+  | "Friends"
+  | "Analytics"
+  | "Settings";
 type Dialog =
   | {
       kind: "setup";
@@ -117,6 +126,10 @@ const nav = [
     icon: Flame,
   },
   {
+    name: "Friends",
+    icon: UsersThree,
+  },
+  {
     name: "Analytics",
     icon: ChartBar,
   },
@@ -163,6 +176,7 @@ export function App({ userId }: { userId: string }) {
       "Skills",
       "Log",
       "Streak",
+      "Friends",
       "Analytics",
       "Settings",
     ].includes(p)
@@ -505,6 +519,10 @@ export function App({ userId }: { userId: string }) {
         ? "Today counts. Keep it going tomorrow."
         : "A little progress today goes a long way.",
     },
+    Friends: {
+      title: "Friends",
+      description: "Study alongside people on Ashvi and keep each other going.",
+    },
     Analytics: {
       title: "Analytics",
       description: "How your hours, skills and consistency add up.",
@@ -525,7 +543,7 @@ export function App({ userId }: { userId: string }) {
     return (
       <div className="auth-shell">
         <Card className="auth-card account-loading">
-          <img src="/assets/cadence-orb.png" alt="" />
+          <img src="/assets/ashvi.png" alt="" />
           <h2>Loading your study space</h2>
           <p role="status">Fetching your account’s progress from Supabase…</p>
           <span className="loading-line" />
@@ -557,7 +575,7 @@ export function App({ userId }: { userId: string }) {
       <fieldset className="app-fieldset" disabled={saving}>
         <header className="brand-row">
           <a className="brand" href="#Today" onClick={() => go("Today")}>
-            <img src="/assets/cadence-orb.png" alt="" />
+            <img src="/assets/ashvi.png" alt="" />
             <div>
               <strong>Ashvi</strong>
               <span>
@@ -1492,6 +1510,7 @@ export function App({ userId }: { userId: string }) {
               </Card>
             </>
           )}
+          {page === "Friends" && <FriendsPage today={today} />}
           {page === "Analytics" && (
             <>
               <Card className="analytics-hours">
