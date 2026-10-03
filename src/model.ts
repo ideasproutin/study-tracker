@@ -3,11 +3,14 @@ export type Topic = { id: string; skillId: string; name: string; createdAt: stri
 export type Session = { id: string; skillId: string; topicId: string | null; topic: string; minutes: number; date: string; time: string; notes: string; completed: boolean; createdAt: string };
 export type Plan = { id: string; topicId: string; date: string; minutes: number; sessionId: string | null };
 export type Timer = { skillId: string; topicId: string | null; topic: string; planId: string | null; elapsed: number; startedAt: number | null; date: string; time: string };
-export type Data = { version: 1; skills: Skill[]; topics: Topic[]; sessions: Session[]; plans: Plan[]; preferences: { dailyTarget: number; onboardingDone: boolean }; timer: Timer | null };
+export const APP_STATUSES = ['Wishlist','Applied','Interviewing','Offer','Rejected','Withdrawn'] as const;
+export type AppStatus = typeof APP_STATUSES[number];
+export type Application = { id: string; company: string; role: string; status: AppStatus; date: string; url: string; location: string; notes: string; createdAt: string };
+export type Data = { version: 1; skills: Skill[]; topics: Topic[]; sessions: Session[]; plans: Plan[]; applications: Application[]; preferences: { dailyTarget: number; onboardingDone: boolean }; timer: Timer | null };
 export const STORAGE_KEY = 'cadence:data:v1';
 export const COLORS = ['#ffc74e','#49cee3','#7b9eff','#38dbb5','#ff985d','#95e66d','#ff738f','#b99bff','#f58bd4','#e5ce9e','#a9c2d8'];
 export const SUGGESTIONS = ['JavaScript','React.js','TypeScript','Tailwind CSS','HTML/CSS','Node.js','Git/GitHub','DSA & Coding','SQL','Frontend/System Design','Theory'];
-export const emptyData = (): Data => ({ version: 1, skills: [], topics: [], sessions: [], plans: [], preferences: { dailyTarget: 180, onboardingDone: false }, timer: null });
+export const emptyData = (): Data => ({ version: 1, skills: [], topics: [], sessions: [], plans: [], applications: [], preferences: { dailyTarget: 180, onboardingDone: false }, timer: null });
 export const uid = () => crypto.randomUUID();
 export function dayKey(date = new Date()) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; }
 export function shiftDay(day: string, amount: number) { const d = new Date(`${day}T12:00:00`); d.setDate(d.getDate()+amount); return dayKey(d); }
@@ -54,14 +57,15 @@ export function timerSeconds(timer: Timer, now = Date.now()) { return timer.elap
 export function validateData(raw: unknown): Data {
   const fail = (): never => { throw new Error('This file is not a valid Cadence backup. No data was changed.'); };
   if(!raw || typeof raw !== 'object') return fail();
-  const d=raw as Data;
+  const d={...(raw as Data),applications:(raw as Data).applications??[]};
   const text=(v:unknown,max=2000): v is string=>typeof v==='string' && v.length<=max;
   const num=(v:unknown,max=100000)=>typeof v==='number' && Number.isFinite(v) && v>=0 && v<=max;
   const timestamp=(v:unknown)=>text(v,40) && Number.isFinite(Date.parse(v));
-  if(d.version!==1 || !Array.isArray(d.skills) || !Array.isArray(d.topics) || !Array.isArray(d.sessions) || !Array.isArray(d.plans) || !d.preferences || !num(d.preferences.dailyTarget,1440) || d.preferences.dailyTarget<1 || typeof d.preferences.onboardingDone!=='boolean') return fail();
-  if([d.skills,d.topics,d.sessions,d.plans].some(a=>a.length>100000)) return fail();
+  if(d.version!==1 || !Array.isArray(d.skills) || !Array.isArray(d.topics) || !Array.isArray(d.sessions) || !Array.isArray(d.plans) || !Array.isArray(d.applications) || !d.preferences || !num(d.preferences.dailyTarget,1440) || d.preferences.dailyTarget<1 || typeof d.preferences.onboardingDone!=='boolean') return fail();
+  if([d.skills,d.topics,d.sessions,d.plans,d.applications].some(a=>a.length>100000)) return fail();
   const ids=(items:{id:string}[])=>items.every(x=>x && text(x.id,100) && x.id.length>0) && new Set(items.map(x=>x.id)).size===items.length;
-  if(![d.skills,d.topics,d.sessions,d.plans].every(ids)) return fail();
+  if(![d.skills,d.topics,d.sessions,d.plans,d.applications].every(ids)) return fail();
+  if(!d.applications.every(a=>text(a.company,200)&&a.company.trim()&&text(a.role,200)&&(APP_STATUSES as readonly string[]).includes(a.status)&&validDay(a.date)&&text(a.url,2000)&&text(a.location,200)&&text(a.notes,10000)&&timestamp(a.createdAt))) return fail();
   if(!d.skills.every(s=>text(s.name,100)&&s.name.trim()&&/^#[0-9a-f]{6}$/i.test(s.color)&&num(s.targetHours)&&timestamp(s.createdAt))) return fail();
   const skillIds=new Set(d.skills.map(s=>s.id)), topicIds=new Set(d.topics.map(t=>t.id)), sessionIds=new Set(d.sessions.map(s=>s.id));
   if(!d.topics.every(t=>skillIds.has(t.skillId)&&text(t.name,200)&&t.name.trim()&&timestamp(t.createdAt)&&(t.completedAt===null||timestamp(t.completedAt)))) return fail();
@@ -69,5 +73,5 @@ export function validateData(raw: unknown): Data {
   if(!d.plans.every(p=>topicIds.has(p.topicId)&&validDay(p.date)&&num(p.minutes,1440)&&p.minutes>0&&(p.sessionId===null||sessionIds.has(p.sessionId)))) return fail();
   if(d.timer!==null) { const t=d.timer; if(!t||!skillIds.has(t.skillId)||(t.topicId!==null&&!d.topics.some(topic=>topic.id===t.topicId&&topic.skillId===t.skillId))||!text(t.topic,200)||!t.topic.trim()||!num(t.elapsed,86400*365)||(t.startedAt!==null&&(!num(t.startedAt,Number.MAX_SAFE_INTEGER)||t.startedAt>Date.now()+60000))||!validDay(t.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(t.time)||(t.planId!==null&&!d.plans.some(p=>p.id===t.planId))) return fail(); }
   // Reconstruct known fields: imported files cannot introduce arbitrary application state.
-  return {version:1,skills:d.skills.map(s=>({...s})),topics:d.topics.map(t=>({...t})),sessions:d.sessions.map(s=>({...s})),plans:d.plans.map(p=>({...p})),preferences:{dailyTarget:d.preferences.dailyTarget,onboardingDone:d.preferences.onboardingDone},timer:d.timer ? {...d.timer}:null};
+  return {version:1,skills:d.skills.map(s=>({...s})),topics:d.topics.map(t=>({...t})),sessions:d.sessions.map(s=>({...s})),plans:d.plans.map(p=>({...p})),applications:d.applications.map(a=>({...a})),preferences:{dailyTarget:d.preferences.dailyTarget,onboardingDone:d.preferences.onboardingDone},timer:d.timer ? {...d.timer}:null};
 }
