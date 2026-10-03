@@ -511,7 +511,7 @@ export function App({ userId }: { userId: string }) {
     },
     Settings: {
       title: "Settings",
-      description: "Make Cadence yours. Keep your learning history safe.",
+      description: "Make Ashvi yours. Keep your learning history safe.",
     },
   };
   const emptySessions = (action?: ReactNode) => (
@@ -559,7 +559,7 @@ export function App({ userId }: { userId: string }) {
           <a className="brand" href="#Today" onClick={() => go("Today")}>
             <img src="/assets/cadence-orb.png" alt="" />
             <div>
-              <strong>Cadence</strong>
+              <strong>Ashvi</strong>
               <span>
                 {new Date(now).toLocaleDateString(undefined, {
                   weekday: "long",
@@ -1798,7 +1798,7 @@ export function App({ userId }: { userId: string }) {
                 <div className="settings-divider" />
                 <h2>Fresh start</h2>
                 <p>
-                  Delete your study history, or reset Cadence and start setup
+                  Delete your study history, or reset Ashvi and start setup
                   again. Export a backup before continuing.
                 </p>
                 <button
@@ -1828,7 +1828,7 @@ export function App({ userId }: { userId: string }) {
                   className="text-button danger-text"
                   onClick={() =>
                     ask(
-                      "Reset Cadence?",
+                      "Reset Ashvi?",
                       "This removes all data and preferences and restarts onboarding. Type DELETE to continue.",
                       async () => await update(() => emptyData(), true),
                       true,
@@ -1842,7 +1842,7 @@ export function App({ userId }: { userId: string }) {
           )}
         </main>
         <footer className="app-footer">
-          A little every day adds up.<span>Cadence</span>
+          A little every day adds up.<span>Ashvi</span>
         </footer>
         {toast && (
           <div className="toast" role="status">
