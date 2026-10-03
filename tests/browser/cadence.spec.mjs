@@ -1,0 +1,199 @@
+import { test, expect } from '@playwright/test';
+import { PGlite } from '@electric-sql/pglite';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+
+// Browser integration uses the real SDK and migration with isolated PostgreSQL.
+// Auth HTTP is simulated; no accounts, emails, or rows reach the live project.
+test('auth, PostgreSQL persistence, calculations, and two-user isolation through the browser', async ({ page, context, browser }) => {
+  const db = new PGlite();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const accounts = new Map();
+  const sessions = new Map();
+  const password = 'isolated-test-password';
+  await db.exec(`create role anon; create role authenticated; create schema auth;
+    create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}');
+    create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+    grant usage on schema public,auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;`);
+  await db.exec(fs.readFileSync('supabase/migrations/202610030001_cadence.sql', 'utf8'));
+  const catalog = await db.exec(fs.readFileSync('supabase/verify-cadence.sql', 'utf8'));
+  const metadata = JSON.parse(catalog.find(result => result.rows.length)?.rows[0].cadence_schema_verification);
+  expect(metadata.tables).toHaveLength(5);
+  expect(metadata.policies).toHaveLength(5);
+    for (const table of metadata.tables) {
+    expect(table.rls_enabled).toBe(true);
+    expect(table.anonymous_select).toBe(false);
+    expect(table.authenticated_crud).toBe(true);
+  }
+  for (const policy of metadata.policies) {
+    expect(policy.roles).toEqual(['authenticated']);
+    expect(policy.command).toBe('ALL');
+    expect(policy.using).toContain('auth.uid()');
+    expect(policy.with_check).toContain('auth.uid()');
+  }
+  for (const fn of metadata.functions) {
+    expect(fn.anonymous_execute).toBe(false);
+    expect(fn.security_definer).toBe(fn.name === 'handle_new_cadence_user');
+  }
+  async function addAccount(email, name) {
+    const user = { id: randomUUID(), email, aud: 'authenticated', role: 'authenticated',
+      created_at: new Date().toISOString(), user_metadata: { display_name: name }, app_metadata: { provider: 'email', providers: ['email'] } };
+    accounts.set(email, user);
+    await db.query('insert into auth.users(id,raw_user_meta_data) values($1,$2::jsonb)', [user.id, JSON.stringify(user.user_metadata)]);
+    return user;
+  }
+  const a = await addAccount('a@example.test', 'User A');
+  await addAccount('b@example.test', 'User B');
+  function authSession(user) {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const access_token = `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify({ sub: user.id, exp, aud: 'authenticated' })).toString('base64url')}.isolated`;
+    sessions.set(access_token, user);
+    return { access_token, refresh_token: `refresh-${user.id}`, expires_in: 3600, expires_at: exp, token_type: 'bearer', user };
+  }
+  async function installRoutes(client) {
+    await client.routeWebSocket('**/realtime/v1/**', socket => socket.close());
+    await client.route('**/auth/v1/**', async route => {
+      const req = route.request(), url = new URL(req.url());
+      const payload = req.postDataJSON() || {};
+      let result, status = 200;
+      if (url.pathname.endsWith('/signup')) result = await addAccount(payload.email, payload.data?.display_name || '');
+      else if (url.pathname.endsWith('/token')) {
+        const user = accounts.get(payload.email);
+        if (!user || payload.password !== password) { status = 400; result = { message: 'Invalid login credentials', error_code: 'invalid_credentials' }; }
+        else result = authSession(user);
+      } else if (url.pathname.endsWith('/user')) result = sessions.get(req.headers().authorization?.replace('Bearer ', ''));
+      else if (url.pathname.endsWith('/logout')) result = {};
+      else { status = 400; result = { message: 'Unexpected isolated auth request' }; }
+      await route.fulfill({ status, json: result || {} });
+    });
+    await client.route('**/rest/v1/**', async route => {
+      const req = route.request(), url = new URL(req.url());
+      const user = sessions.get(req.headers().authorization?.replace('Bearer ', ''));
+      try {
+        const result = await db.transaction(async tx => {
+          await tx.exec(`set local role ${user ? 'authenticated' : 'anon'}`);
+          await tx.query("select set_config('request.jwt.claim.sub',$1,true)", [user?.id || '']);
+          if (url.pathname.endsWith('/cadence_snapshot')) return (await tx.query('select public.cadence_snapshot() as snapshot')).rows[0].snapshot;
+          if (url.pathname.endsWith('/cadence_apply_changes')) {
+            const { expected_revision, changes } = req.postDataJSON();
+            return (await tx.query('select public.cadence_apply_changes($1,$2::jsonb) as snapshot', [expected_revision, JSON.stringify(changes)])).rows[0].snapshot;
+          }
+          throw new Error(`Unexpected isolated REST request: ${url.pathname}`);
+        });
+        await route.fulfill({ json: result });
+      } catch (error) {
+        await route.fulfill({ status: 400, json: { code: error.code, message: error.message } });
+      }
+    });
+  }
+  async function login(client, email) {
+    await client.getByLabel('EMAIL', { exact: true }).fill(email);
+    await client.getByLabel('PASSWORD', { exact: true }).fill(password);
+    await client.getByRole('button', { name: 'Sign In', exact: true }).click();
+  }
+  async function logout(client) {
+    await client.getByRole('button', { name: 'Settings', exact: true }).click();
+    await client.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(client.getByRole('button', { name: 'Sign In', exact: true })).toBeVisible();
+  }
+  async function screenshot(name) {
+    await page.screenshot({ path: `test-results/browser/${name}.png`, fullPage: true });
+  }
+  let second;
+  try {
+    await installRoutes(context);
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: 'Sign In', exact: true })).toBeVisible();
+    await screenshot('login-desktop');
+    await page.getByRole('button', { name: 'Create account', exact: true }).click();
+    await page.getByLabel('NAME', { exact: true }).fill('New learner');
+    await page.getByLabel('EMAIL', { exact: true }).fill('new@example.test');
+    await page.getByLabel('PASSWORD', { exact: true }).fill(password);
+    await page.getByLabel('CONFIRM PASSWORD', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Create account', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('Check your email');
+    await page.getByRole('button', { name: 'Back to Sign In' }).click();
+    await login(page, a.email);
+    await page.getByRole('button', { name: 'JavaScript', exact: true }).click();
+    await page.getByLabel('TOPICS FOR YOUR FIRST SKILL (OPTIONAL)').fill('Closures');
+    await page.getByRole('button', { name: 'Create my study space' }).click();
+    await expect(page.locator('.mini-stats .inset').filter({ hasText: 'STUDIED' })).toContainText('0m');
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await page.getByRole('button', { name: 'JavaScript', exact: true }).click();
+    await page.getByRole('button', { name: 'Closures', exact: true }).click();
+    await page.getByLabel('NOTES', { exact: true }).fill('Browser integration verification');
+    await page.getByRole('button', { name: 'Add 45m of JavaScript', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Edit session Closures' })).toBeVisible();
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await expect(page.locator('.mini-stats .inset').filter({ hasText: 'STUDIED' })).toContainText('45m');
+    await expect(page.locator('.hero-number')).toHaveText('15m');
+    await expect(page.getByText('75% of today’s target')).toBeVisible();
+    await screenshot('today-desktop');
+    await page.reload();
+    await expect(page.locator('.hero-number')).toHaveText('15m');
+    await expect(page.getByRole('button', { name: 'Sign In', exact: true })).toHaveCount(0);
+    for (const name of ['Skills', 'Log', 'Streak', 'Analytics', 'Settings']) {
+      await page.getByRole('button', { name, exact: true }).click();
+      if (name === 'Skills') await expect(page.getByText('100%', { exact: true })).toBeVisible();
+      if (name === 'Streak') await expect(page.locator('.stats-grid .glass').first().locator('.stat-number')).toHaveText('1days');
+      if (name === 'Analytics') {
+        await expect(page.locator('.analytics-hours')).toContainText('0.8h over the last 14 days');
+        await expect(page.locator('.completion-content')).toContainText('1 topics completed');
+        for (const mode of ['Weekly', 'Monthly', 'Daily']) await page.getByRole('button', { name: mode, exact: true }).click();
+        await expect(page.locator('.recharts-surface').first()).toBeVisible();
+      }
+      await screenshot(`${name.toLowerCase()}-desktop`);
+    }
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const name of ['Today', 'Skills', 'Log', 'Streak', 'Analytics', 'Settings']) {
+        await page.getByRole('button', { name, exact: true }).click();
+        const overflow = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth,
+          elements: [...document.querySelectorAll('main *')].filter(element => element.getBoundingClientRect().right > window.innerWidth)
+            .slice(0, 8).map(element => `${element.tagName}.${element.className}`) }));
+        expect(overflow.scrollWidth, `${name} at ${width}px: ${JSON.stringify(overflow)}`).toBeLessThanOrEqual(width);
+      }
+      await page.getByRole('button', { name: 'Today', exact: true }).click();
+      await screenshot(`today-mobile-${width}`);
+    }
+    second = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
+    await installRoutes(second);
+    const device = await second.newPage();
+    await device.goto('http://127.0.0.1:4173/');
+    await login(device, a.email);
+    await expect(device.locator('.hero-number')).toHaveText('15m');
+    await logout(page);
+    await login(page, 'b@example.test');
+    await expect(page.getByRole('button', { name: 'Create my study space' })).toBeVisible();
+    await page.getByRole('button', { name: 'Create my study space' }).click();
+    await page.getByRole('button', { name: 'Skills', exact: true }).click();
+    await expect(page.getByText('JavaScript', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Edit session Closures' })).toHaveCount(0);
+    await logout(page);
+    await login(page, a.email);
+    await expect(page.locator('.hero-number')).toHaveText('15m');
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await page.getByRole('button', { name: 'Edit session Closures' }).click();
+    await page.getByLabel('DURATION', { exact: true }).fill('30');
+    await page.getByRole('switch', { name: 'Mark topic complete' }).click();
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await expect(page.locator('.hero-number')).toHaveText('30m');
+    await device.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(device.locator('.hero-number')).toHaveText('30m');
+    await page.getByRole('button', { name: 'Streak', exact: true }).click();
+    await expect(page.locator('.stats-grid .glass').first().locator('.stat-number')).toHaveText('0days');
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete session Closures' }).click();
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+    await expect(page.getByText('No study sessions yet')).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await second?.close();
+    await context.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+    await db.close();
+  }
+});

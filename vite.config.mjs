@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   build: {
     outDir: "dist/client",
-    rollupOptions: { output: { manualChunks: { charts: ["recharts"] } } },
+    rollupOptions: { output: { manualChunks: { charts: ["recharts"], supabase: ["@supabase/supabase-js"] } } },
   },
   optimizeDeps: {
     include: ["react", "react-dom/client"],
