@@ -1,5 +1,9 @@
 **Final result: blocked**
 
+Current Supabase follow-up: the user applied the SQL migration. All five live table endpoints and both Cadence RPCs deny anonymous access. Microsoft Edge browser integration passed against the real SDK and isolated PostgreSQL using the existing migration. It covers signup messaging, login/logout, persistent auth, skills/topics, sessions, calculations, refresh, second browser context, editing/deletion, and two-user isolation. Auth HTTP is simulated in this test; it does not establish live email delivery or authenticated remote RLS. Live account verification and installed-policy metadata remain pending the requested user setup/results.
+
+Desktop screenshots now exist for login and all six account screens at 1360px; mobile Today captures exist at 390px and 320px under `test-results/browser/`. All six account screens pass horizontal-overflow checks at both mobile widths. The browser found native date/time control overflow at 320px; adding minimum-width constraints to the two-column form children and inputs fixed it without changing desktop layout. No uncaught JavaScript page errors were observed. Login, Today, and Analytics screenshots were visually inspected against the supplied visual language. The earlier browser-capture gap below is historical; exhaustive full-view/region source comparisons and remaining original timer/backup browser QA are still pending, so the overall design report remains blocked.
+
 final result: blocked
 
 Source visual truth: the five supplied Cadence reference images in `C:/Users/vaishnavi/Downloads/` (Today, Skills, Log, Streak, Analytics).

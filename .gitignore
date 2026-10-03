@@ -3,3 +3,10 @@ dist/
 .starter/
 coverage/
 *.local
+.env
+.env.*
+!.env.example
+!.env.test.example
+supabase/.temp/
+test-results/
+playwright-report/
